@@ -31,6 +31,14 @@ use crate::{
 pub struct List<T> {
     closure: Box<dyn Fn() -> Box<dyn Widget<T>>>,
     children: Vec<WidgetPod<T, Box<dyn Widget<T>>>>,
+    orientation: Orientation,
+}
+
+/// A simple indicator for how to place the children of the list (Horizontally or Vertically)
+#[derive(Debug,PartialEq,Clone)]
+pub enum Orientation {
+    Horizontal,
+    Vertical,
 }
 
 impl<T: Data> List<T> {
@@ -40,6 +48,7 @@ impl<T: Data> List<T> {
         List {
             closure: Box::new(move || Box::new(closure())),
             children: Vec::new(),
+            orientation: Orientation::Vertical,
         }
     }
 
@@ -60,6 +69,82 @@ impl<T: Data> List<T> {
         }
         len != data.data_len()
     }
+
+    /// At creation time, change the list's orientation. It defaults to Orientation::Vertical. The
+    /// other option is Orientation::Horizontal.
+    pub fn with_orientation(mut self, orientation: Orientation) -> Self {
+        self.orientation = orientation;
+        self
+    }
+
+    /// Do the list layout in the vertical orientation (this is called by Widget::layout)
+    fn layout_vertical<L:ListIter<T>>(&mut self, ctx: &mut LayoutCtx, 
+        bc: &BoxConstraints, data: &L, env: &Env) -> Size {
+        let mut width = bc.min().width;
+        let mut y = 0.0;
+
+        let mut paint_rect = Rect::ZERO;
+        let mut children = self.children.iter_mut();
+        data.for_each(|child_data, _| {
+            let child = match children.next() {
+                Some(child) => child,
+                None => {
+                    return;
+                }
+            };
+            let child_bc = BoxConstraints::new(
+                Size::new(bc.min().width, 0.0),
+                Size::new(bc.max().width, std::f64::INFINITY),
+            );
+            let child_size = child.layout(ctx, &child_bc, child_data, env);
+            let rect = Rect::from_origin_size(Point::new(0.0, y), child_size);
+            child.set_layout_rect(ctx, child_data, env, rect);
+            paint_rect = paint_rect.union(child.paint_rect());
+            width = width.max(child_size.width);
+            y += child_size.height;
+        });
+
+        let my_size = bc.constrain(Size::new(width, y));
+        let insets = paint_rect - Rect::ZERO.with_size(my_size);
+        ctx.set_paint_insets(insets);
+        my_size
+    }
+
+    /// Do the layout in the horizontal (row-oriented) direction. This function is called by
+    /// Widget::layout.
+    fn layout_horizontal<L:ListIter<T>>(&mut self, ctx: &mut LayoutCtx, 
+        bc: &BoxConstraints, data: &L, env: &Env) -> Size {
+        let mut height = bc.min().height;
+        let mut x = 0.0;
+
+        let mut paint_rect = Rect::ZERO;
+        let num_children = 1.max(self.children.len()) as f64;
+        let mut children = self.children.iter_mut();
+        data.for_each(|child_data, _| {
+            let child = match children.next() {
+                Some(child) => child,
+                None => {
+                    return;
+                }
+            };
+            let child_bc = BoxConstraints::new(
+                Size::new(bc.min().width, bc.min().height),
+                Size::new(bc.max().width/num_children, bc.max().height),
+            );
+            let child_size = child.layout(ctx, &child_bc, child_data, env);
+            let rect = Rect::from_origin_size(Point::new(x,0.0), child_size);
+            child.set_layout_rect(ctx, child_data, env, rect);
+            paint_rect = paint_rect.union(child.paint_rect());
+            height = height.max(child_size.height);
+            x += child_size.width;
+        });
+
+        let my_size = bc.constrain(Size::new(x, height));
+        let insets = paint_rect - Rect::ZERO.with_size(my_size);
+        ctx.set_paint_insets(insets);
+        my_size
+    }
+
 }
 
 /// This iterator enables writing List widget for any `Data`.
@@ -235,34 +320,11 @@ impl<C: Data, T: ListIter<C>> Widget<T> for List<C> {
     }
 
     fn layout(&mut self, ctx: &mut LayoutCtx, bc: &BoxConstraints, data: &T, env: &Env) -> Size {
-        let mut width = bc.min().width;
-        let mut y = 0.0;
-
-        let mut paint_rect = Rect::ZERO;
-        let mut children = self.children.iter_mut();
-        data.for_each(|child_data, _| {
-            let child = match children.next() {
-                Some(child) => child,
-                None => {
-                    return;
-                }
-            };
-            let child_bc = BoxConstraints::new(
-                Size::new(bc.min().width, 0.0),
-                Size::new(bc.max().width, std::f64::INFINITY),
-            );
-            let child_size = child.layout(ctx, &child_bc, child_data, env);
-            let rect = Rect::from_origin_size(Point::new(0.0, y), child_size);
-            child.set_layout_rect(ctx, child_data, env, rect);
-            paint_rect = paint_rect.union(child.paint_rect());
-            width = width.max(child_size.width);
-            y += child_size.height;
-        });
-
-        let my_size = bc.constrain(Size::new(width, y));
-        let insets = paint_rect - Rect::ZERO.with_size(my_size);
-        ctx.set_paint_insets(insets);
-        my_size
+        if self.orientation == Orientation::Horizontal {
+            self.layout_horizontal(ctx, bc, data, env)
+        } else {
+            self.layout_vertical(ctx, bc, data, env)
+        }
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx, data: &T, env: &Env) {
